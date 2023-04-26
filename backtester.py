@@ -1,43 +1,34 @@
-python
-import pandas as pd
-import talib
-import numpy as np
-import config
+from typing import List
+import time
+
+from exchange import Exchange
+from indicators import Indicators
+from config import PERIOD_WEIGHTS, TRADE_SYMBOL
 
 class Backtester:
+    def __init__(self, exchange: Exchange):
+        self.exchange = exchange
 
-    def __init__(self, df):
-        self.df = df
+    def get_trade_history(self, test_start_time: float, test_end_time: float, period_weight: float) -> List:
+        trade_history = []
+        indicators = Indicators(period_weight, PERIODS)
 
-    def run_backtest(self, rsi_period, macd_period, bb_period, overbought_rsi, oversold_rsi):
-        buy_signals = []
-        sell_signals = []
-        traded_volume = []
-        trades = []
-        bought_at_price = 0
-        bought_at = None
+        caps = self.exchange.get_exchange_caps()
+        symbol = self.exchange.get_exchange_symbol(TRADE_SYMBOL, caps)
+        candles = self.exchange.get_exchange_candles(symbol, period_weight)
 
-        for index, row in self.df.iterrows():
-            if self.df['timestamp'][index] > (self.df['timestamp'][0] + pd.Timedelta(str(config.PERIOD) + ' minutes')):
-                rsi = talib.RSI(self.df['close'][:index], rsi_period)[rsi_period-1:]
-                macd, macd_signal, macd_hist = talib.MACD(self.df['close'][:index], fastperiod=macd_period[0], slowperiod=macd_period[1], signalperiod=macd_period[2])
-                bb_upper, _, bb_lower = talib.BBANDS(self.df['close'][:index], timeperiod=bb_period)
-                last_price = self.df['close'][index]
-                last_vol = self.df['volume'][index]
+        for i in range(int(test_start_time), int(test_end_time)):
+            if time.time() - i > 0:
+                break
 
-                if rsi[-1] < oversold_rsi and macd[-1] > macd_signal[-1] and last_price <= bb_lower[-1]:
-                    if bought_at_price == 0:
-                        buy_signals.append(self.df['timestamp'][index])
-                        traded_volume.append(last_price * config.USE_CURRENCY)
-                        bought_at_price = last_price
-                        bought_at = self.df['timestamp'][index]
-                        trades.append(['BUY', last_vol, last_price, bought_at_price])
-                elif bought_at_price != 0 and (rsi[-1] > overbought_rsi or macd[-1] < macd_signal[-1] or last_price >= bb_upper[-1]):
-                    sell_signals.append(self.df['timestamp'][index])
-                    profit = last_price / bought_at_price - 1
-                    balance = traded_volume[-1] * (1 + profit)
-                    trades.append(['SELL', last_vol, last_price, bought_at_price, bought_at, self.df['timestamp'][index], profit, balance])
-                    bought_at_price = 0
-                    bought_at = None
+            indicators.add_price(candles[i])
+            if indicators.is_buy_signal():
+                buy_price = candles[i]
+                self.exchange.limit_buy_order(TRADE_SYMBOL, buy_price, TRADE_AMOUNT)
+                trade_history.append(f'Покупка: {candles[i]}, {time.ctime(i)}')
+            elif indicators.is_sell_signal():
+                sell_price = candles[i]
+                self.exchange.limit_sell_order(TRADE_SYMBOL, sell_price, TRADE_AMOUNT)
+                trade_history.append(f'Продажа: {candles[i]}, {time.ctime(i)}')
 
-        return buy_signals, sell_signals, traded_volume, pd.DataFrame(trades, columns=['Action', 'Volume', 'Price', 'Bought_at_price', 'Bought_at', 'Sold_at', 'Profit', 'Balance'])
+        return trade_history
